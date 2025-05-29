@@ -670,6 +670,10 @@ def flashatt_kernel(
 
     q = tl.load(q_ptr + off_q, mask_q) # [B0]
     
+    max_logits = tl.zeros([B0], dtype = tl.float32)
+    d = tl.zeros([B0, ], dtype = tl.float32)
+    o = tl.zeros([B0, ], dtype = tl.float32)
+
     for id in tl.range(0, T, B1):
         off_kv = tl.arange(0, B1) + id
         mask_kv = off_kv < T
@@ -677,10 +681,25 @@ def flashatt_kernel(
         k = tl.load(k_ptr + off_kv, mask_kv) # [B1]
         v = tl.load(v_ptr + off_kv, mask_kv) # [B1]
 
-        qk = q[:, None] * k[None, :]
-        mask_qk = off_q[:, None] * off_kv[None, :] #[B1, B1]
+        mask_qk = off_q[:, None] * off_kv[None, :] #[B0, B1]
+        qk = q[:, None] * k[None, :] + tl.where(mask_qk, 0, -1.0e6)
 
+        max_now = tl.max(qk, axis = 1) # [B0]
+        prev_max = max_logits
+        # print(q.shape, k.shape)
+        # print(qk.shape)
+        max_logits = tl.maximum(max_logits, max_now) #[B0]
 
+        prev_d = d
+        d_add = tl.exp2(log2_e * (qk - max_logits[:, None]))
+        d_upd = tl.exp2(log2_e * (prev_max - max_logits))
+        d = d * d_upd + tl.sum(d_add, axis = 1)
+
+        o_upd = prev_d * tl.exp2(log2_e * (prev_max - max_logits))[:, None] / d
+        o_add = tl.exp2(log2_e * (qk - max_logits[:, None])) / d * v
+        o = o * o_upd + o_add
+
+    tl.store(z_ptr + off_q, o, mask_q)
 
     return
 
