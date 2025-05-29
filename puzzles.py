@@ -516,6 +516,52 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
     block_id_i = tl.program_id(0)
     log2_e = 1.44269504
     # Finish me!
+    # x: [N0, T]
+    # z: [N0, T]
+    # softmax(x) = \frac {{exp(x_i-max(x_i))} {\sum{exp(x_i)-max(x_i)}}}
+
+    off_z = tl.arange(0, B0) + B0 * block_id_i
+    mask_z = off_z < N0
+
+    max_logits = tl.zeros([B0], dtype = tl.float32)
+    sum_logits = tl.zeros([B0], dtype = tl.float32)
+
+    # compute max
+    for id in tl.range(0, T, B1):
+        off_x = tl.arange(0, B1) + id
+        off_xz = off_x[None,:] + off_z[:,None] * T
+
+        mask_xz = (off_x < T) & mask_z
+
+        x = tl.load(x_ptr + off_xz, mask_xz)
+        x = tl.maximum(x, axis = 1)
+
+        max_logits = tl.maximum(max_logits, x)
+
+    # compute sum
+    for id in tl.range(0, T, B1):
+        off_x = tl.arange(0, B1) + id
+        off_xz = off_x[None,:] + off_z[:,None] * T
+
+        mask_xz = (off_x < T) & mask_z
+
+        x = tl.load(x_ptr + off_xz, mask_xz)
+        x = x - max_logits[None, :]
+
+        sum_logits += tl.sum(x, axis = 1)
+    
+    # compute softmax value
+    for id in tl.range(0, T, B1):
+        off_x = tl.arange(0, B1) + id
+        off_xz = off_x[None,:] + off_z[:,None] * T
+
+        mask_xz = (off_x < T) & mask_z
+
+        x = tl.load(x_ptr + off_xz, mask_xz)
+
+        z = x / sum
+        tl.store(z_ptr + off_xz, z, mask = mask_xz)
+    
     return
 
 
@@ -527,6 +573,7 @@ def softmax_kernel_brute_force(
     block_id_i = tl.program_id(0)
     log2_e = 1.44269504
     # Finish me!
+
     return
 
 
