@@ -67,7 +67,9 @@ def demo1(x_ptr):
 
 def run_demo1():
     print("Demo1 Output: ")
-    demo1[(1, 1, 1)](torch.ones(4, 3))
+    x = torch.ones(4, 3)
+    print("x: ", x)
+    demo1[(1, 1, 1)](x)
     print_end_line()
 
 
@@ -108,6 +110,7 @@ def demo2(x_ptr):
     range = i_range * 4 + j_range
     # print works in the interpreter
     print(range)
+    print((i_range < 4) & (j_range < 3))
     x = tl.load(x_ptr + range, (i_range < 4) & (j_range < 3), 0)
     print(x)
 
@@ -216,6 +219,8 @@ def add_kernel(x_ptr, z_ptr, N0, B0: tl.constexpr):
     off_x = tl.arange(0, B0)
     x = tl.load(x_ptr + off_x)
     # Finish me!
+    z = x + 10.0
+    tl.store(z_ptr + off_x, z, off_x < N0)
     return
 
 
@@ -237,6 +242,11 @@ def add2_spec(x: Float32[200,]) -> Float32[200,]:
 @triton.jit
 def add_mask2_kernel(x_ptr, z_ptr, N0, B0: tl.constexpr):
     # Finish me!
+    pid = tl.program_id(0)
+    off_x = tl.arange(0, B0) + pid * B0
+    x = tl.load(x_ptr + off_x, off_x < N0)
+    z = add2_spec(x)
+    tl.store(z_ptr + off_x, z, off_x < N0)
     return
 
 
@@ -260,6 +270,21 @@ def add_vec_spec(x: Float32[32,], y: Float32[32,]) -> Float32[32, 32]:
 @triton.jit
 def add_vec_kernel(x_ptr, y_ptr, z_ptr, N0, N1, B0: tl.constexpr, B1: tl.constexpr):
     # Finish me!
+    # x 行 y 列
+    x_offset = tl.arange(0, B0)
+    y_offset = tl.arange(0, B1)
+
+    x = tl.load(x_ptr + x_offset, x_offset < N0)
+    y = tl.load(y_ptr + y_offset, y_offset < N1)
+
+    z = add_vec_spec(x, y)
+    print(x_offset)
+    print(y_offset)
+    z_offset = x_offset[:, None] * N1 + y_offset[None, :]
+    print(z_offset)
+
+    tl.store(z_ptr + z_offset, z, (x_offset[:, None] < N0) & (y_offset < N1)[None, :])
+
     return
 
 
@@ -287,6 +312,22 @@ def add_vec_block_kernel(
     block_id_x = tl.program_id(0)
     block_id_y = tl.program_id(1)
     # Finish me!
+    # stride x: N0
+    # stride y: N1
+    # 实际矩阵是(N1, N0)
+
+    x_off = tl.arange(0, B0) + B0 * block_id_x
+    y_off = tl.arange(0, B1) + B1 * block_id_y
+
+    x_block = tl.load(x_ptr + x_off, x_off < N0)
+    y_block = tl.load(y_ptr + y_off, y_off < N1)
+
+    z = add_vec_block_spec(x_block, y_block)
+    # 返回一个[block_x, block_y] 大小的
+    z_off = x_off[None, :] + y_off[:, None] * N0
+    # print(N0, N1, B0, B1)
+    # print(z_off.shape)
+    tl.store(z_ptr + z_off, z, (x_off[None, :] < N0) & (y_off[:, None] < N1))
     return
 
 
@@ -314,6 +355,23 @@ def mul_relu_block_kernel(
     block_id_x = tl.program_id(0)
     block_id_y = tl.program_id(1)
     # Finish me!
+
+    x_off = tl.arange(0, B0) + B0 * block_id_x
+    y_off = tl.arange(0, B1) + B1 * block_id_y
+
+    x = tl.load(x_ptr + x_off, x_off < N0)
+    y = tl.load(y_ptr + y_off, y_off < N1)
+
+
+    # z = mul_relu_block_spec(x, y)
+    z = tl.maximum(.0, (x[None, :] * y[:, None]))
+
+
+    z_off = x_off[None, :] + y_off[:, None] * N0
+    
+
+    tl.store(z_ptr + z_off, z, (x_off[None, :] < N0) & (y_off[:, None] < N1))
+
     return
 
 
