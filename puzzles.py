@@ -412,6 +412,26 @@ def mul_relu_block_back_kernel(
     block_id_i = tl.program_id(0)
     block_id_j = tl.program_id(1)
     # Finish me!
+
+    x_off = tl.arange(0, B0) + B0 * block_id_i
+    y_off = tl.arange(0, B1) + B1 * block_id_j
+    z_off = x_off[None, :] + y_off[:, None] * N0
+
+    x_mask = x_off < N0
+    y_mask = y_off < N1
+    z_mask = x_mask[None, :] & y_mask[:, None]
+
+    x_block = tl.load(x_ptr + z_off, z_mask)    # 这里的x是(N0, N1)
+    y_block = tl.load(y_ptr + y_off, y_mask)
+    dz = tl.load(dz_ptr + z_off, z_mask)
+    # dx = mul_relu_block_back_spec(x_block, y_block, dz)
+    
+
+    df = tl.where(x_block * y_block[:, None] > 0, 1.0, 0.0)
+    dx = df * y_block[:, None] * dz   
+
+    tl.store(dx_ptr + z_off, dx, z_mask)
+
     return
 
 
