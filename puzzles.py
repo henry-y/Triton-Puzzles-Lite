@@ -537,6 +537,61 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
 
         x = tl.load(x_ptr + off_xz, mask_xz)
         # print(x.shape)
+        max_x = tl.max(x, axis = 1)
+
+        prev_max = max_logits
+        max_logits = tl.maximum(max_logits, max_x)
+        
+        # update prev sum
+        sum_logits = sum_logits * tl.exp2(log2_e * (- max_logits + prev_max))
+
+        # add now
+        sum_logits += tl.sum(tl.exp2(log2_e * (x - max_logits[:, None])), axis = 1)
+    
+    # compute softmax value
+    for id in tl.range(0, T, B1):
+        off_x = tl.arange(0, B1) + id
+        off_xz = off_x[None,:] + off_z[:,None] * T
+
+        mask_xz = (off_x < T)[None, :] & mask_z[:, None]
+
+        x = tl.load(x_ptr + off_xz, mask_xz)
+        x = tl.exp2(log2_e * (x - max_logits[:, None]))
+        z = x / sum_logits[:, None]
+        tl.store(z_ptr + off_xz, z, mask = mask_xz)
+    
+    return
+
+
+@triton.jit
+def softmax_kernel_brute_force(
+    x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr
+):
+    """3 loops ver."""
+    block_id_i = tl.program_id(0)
+    log2_e = 1.44269504
+    # Finish me!
+    # x: [N0, T]
+    # z: [N0, T]
+    # softmax(x) = \frac {{exp(x_i-max(x_i))} {\sum{exp(x_i)-max(x_i)}}}
+
+    off_z = tl.arange(0, B0) + B0 * block_id_i
+    mask_z = off_z < N0
+
+    max_logits = tl.zeros([B0], dtype = tl.float32)
+    sum_logits = tl.zeros([B0], dtype = tl.float32)
+
+    # print(B0, B1, N0, N1, T)
+
+    # compute max
+    for id in tl.range(0, T, B1):
+        off_x = tl.arange(0, B1) + id
+        off_xz = off_x[None,:] + off_z[:,None] * T
+
+        mask_xz = (off_x < T)[None, :] & mask_z[:, None]
+
+        x = tl.load(x_ptr + off_xz, mask_xz)
+        # print(x.shape)
         x = tl.max(x, axis = 1)
 
         max_logits = tl.maximum(max_logits, x)
@@ -566,18 +621,6 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
         z = x / sum_logits[:, None]
         tl.store(z_ptr + off_xz, z, mask = mask_xz)
     
-    return
-
-
-@triton.jit
-def softmax_kernel_brute_force(
-    x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr
-):
-    """3 loops ver."""
-    block_id_i = tl.program_id(0)
-    log2_e = 1.44269504
-    # Finish me!
-
     return
 
 
@@ -616,6 +659,29 @@ def flashatt_kernel(
     log2_e = 1.44269504
     myexp = lambda x: tl.exp2(log2_e * x)
     # Finish me!
+    # q: [N0, T]
+    # k: [N0, T]
+    # v: [N0, T]
+    # z: [N0, T]
+    
+    
+    off_q = tl.arange(0, B0) + B0 * block_id_i
+    mask_q = off_q < N0
+
+    q = tl.load(q_ptr + off_q, mask_q) # [B0]
+    
+    for id in tl.range(0, T, B1):
+        off_kv = tl.arange(0, B1) + id
+        mask_kv = off_kv < T
+
+        k = tl.load(k_ptr + off_kv, mask_kv) # [B1]
+        v = tl.load(v_ptr + off_kv, mask_kv) # [B1]
+
+        qk = q[:, None] * k[None, :]
+        mask_qk = off_q[:, None] * off_kv[None, :] #[B1, B1]
+
+
+
     return
 
 
