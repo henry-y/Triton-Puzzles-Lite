@@ -549,10 +549,10 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
         mask_xz = (off_x < T)[None, :] & mask_z[:, None]
 
         x = tl.load(x_ptr + off_xz, mask_xz)
-        x = x - max_logits[None, :]
+        x = x - max_logits[:, None]
         x = tl.exp2(log2_e * x)
 
-        sum_logits += tl.sum(x)
+        sum_logits += tl.sum(x, axis = 1)
     
     # compute softmax value
     for id in tl.range(0, T, B1):
@@ -562,8 +562,8 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
         mask_xz = (off_x < T)[None, :] & mask_z[:, None]
 
         x = tl.load(x_ptr + off_xz, mask_xz)
-
-        z = x / sum_logits[None, :]
+        x = tl.exp2(log2_e * (x - max_logits[:, None]))
+        z = x / sum_logits[:, None]
         tl.store(z_ptr + off_xz, z, mask = mask_xz)
     
     return
