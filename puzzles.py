@@ -643,12 +643,12 @@ Hint: Use `tl.where` to mask `q dot k` to -inf to avoid overflow (NaN).
 def flashatt_spec(
     q: Float32[200,], k: Float32[200,], v: Float32[200,]
 ) -> Float32[200,]:
-    x = q[:, None] * k[None, :]
-    x_max = x.max(1, keepdim=True)[0]
-    x = x - x_max
-    x_exp = x.exp()
-    soft = x_exp / x_exp.sum(1, keepdim=True)
-    return (v[None, :] * soft).sum(1)
+    x = q[:, None] * k[None, :] # [N0, T]
+    x_max = x.max(1, keepdim=True)[0] # [N0, ]
+    x = x - x_max # [N0, T]
+    x_exp = x.exp() #[N0, T]
+    soft = x_exp / x_exp.sum(1, keepdim=True) # [N0, T]
+    return (v[None, :] * soft).sum(1) #[N0, T] * [T] = [N0, T] -> [N0]
 
 
 @triton.jit
@@ -669,36 +669,40 @@ def flashatt_kernel(
     mask_q = off_q < N0
 
     q = tl.load(q_ptr + off_q, mask_q) # [B0]
-    
-    max_logits = tl.zeros([B0], dtype = tl.float32)
-    d = tl.zeros([B0, ], dtype = tl.float32)
-    o = tl.zeros([B0, ], dtype = tl.float32)
+    inf = 1.0e6
+    # m_i
+    max_logits = tl.full([B0], -inf, dtype = tl.float32)
+    # l_i
+    expsum = tl.zeros([B0], dtype = tl.float32)
+    # f_i
+    o = tl.zeros([B0], dtype = tl.float32)
 
     for id in tl.range(0, T, B1):
         off_kv = tl.arange(0, B1) + id
         mask_kv = off_kv < T
 
-        k = tl.load(k_ptr + off_kv, mask_kv) # [B1]
-        v = tl.load(v_ptr + off_kv, mask_kv) # [B1]
+        k = tl.load(k_ptr + off_kv, mask_kv, other=0.0) # [B1]
+        v = tl.load(v_ptr + off_kv, mask_kv, other=0.0) # [B1]
 
-        mask_qk = off_q[:, None] * off_kv[None, :] #[B0, B1]
+        mask_qk = off_q[:, None] & off_kv[None, :] #[B0, B1]
         qk = q[:, None] * k[None, :] + tl.where(mask_qk, 0, -1.0e6)
 
-        max_now = tl.max(qk, axis = 1) # [B0]
-        prev_max = max_logits
         # print(q.shape, k.shape)
         # print(qk.shape)
-        max_logits = tl.maximum(max_logits, max_now) #[B0]
 
-        prev_d = d
-        d_add = tl.exp2(log2_e * (qk - max_logits[:, None]))
-        d_upd = tl.exp2(log2_e * (prev_max - max_logits))
-        d = d * d_upd + tl.sum(d_add, axis = 1)
+        #upd m
+        prev_max = max_logits
+        max_logits = tl.maximum(max_logits, tl.max(qk, axis = 1)) #[B0]
+        factor = tl.exp2(log2_e * (prev_max - max_logits))
 
-        o_upd = prev_d * tl.exp2(log2_e * (prev_max - max_logits))[:, None] / d
-        o_add = tl.exp2(log2_e * (qk - max_logits[:, None])) / d * v
-        o = o * o_upd + o_add
+        exp_qk = tl.exp2(log2_e * (qk - max_logits[:, None]))
 
+        # upd f
+        o = factor * o + tl.sum(exp_qk * v[None, :], axis = 1)
+        # upd l
+        expsum = factor * expsum + tl.sum(exp_qk, axis = 1)
+
+    o = o / expsum
     tl.store(z_ptr + off_q, o, mask_q)
 
     return
