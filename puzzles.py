@@ -734,12 +734,45 @@ def conv2d_spec(x: Float32[4, 8, 8], k: Float32[4, 4]) -> Float32[4, 8, 8]:
 
 @triton.jit
 def conv2d_kernel(
-    x_ptr, k_ptr, z_ptr, N0, H, W, KH: tl.constexpr, KW: tl.constexpr, B0: tl.constexpr
+    x_ptr, k_ptr, z_ptr, N0, H, W, KH: tl.constexpr, KW: tl.constexpr, 
+    B0: tl.constexpr
 ):
     block_id_i = tl.program_id(0)
     # Finish me!
     # block_id_i 在 第一维上面
-    
+    # x_dim: [N0, H, W]
+    # kernel_dim: [KH, KW]
+    # PART OF X:
+    #   [B0, H, W]
+    #   
+    off_x = tl.arange(0, B0) + B0 * block_id_i
+    mask_x = off_x < N0
+
+    off_kh = tl.arange(0, KH)
+    off_kw = tl.arange(0, KW)
+    off_k = off_kh[:, None] * KW + off_kw[None, :]
+    mask_k = (tl.arange(0, KH) < KH)[:, None] & (tl.arange(0, KW) < KW)[None, :]
+
+    kernel = tl.load(k_ptr + off_k, mask_k)
+
+    for stride_h in tl.range(0, H):
+        for stride_w in tl.range(0, W):
+            off_h = tl.arange(0, KH) + stride_h
+            off_w = tl.arange(0, KW) + stride_w
+            mask_h = off_h < H
+            mask_w = off_w < W 
+
+            real_off = off_x[:, None, None] * H * W + off_h[None, :, None] * W + off_w[None, None, :]
+            real_mask = mask_x[:, None, None] & mask_h[None, :, None] & mask_w[None, None, :]
+
+            x = tl.load(x_ptr + real_off, real_mask)
+            z = x * kernel
+            z = tl.sum(z, axis = 1)
+            z = tl.sum(z, axis = 1)
+
+            off_z = off_x * H * W + stride_h * W + stride_w
+            tl.store(z_ptr + off_z, z)
+
     return
 
 
