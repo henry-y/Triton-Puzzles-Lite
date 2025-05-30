@@ -738,6 +738,8 @@ def conv2d_kernel(
 ):
     block_id_i = tl.program_id(0)
     # Finish me!
+    # block_id_i 在 第一维上面
+    
     return
 
 
@@ -784,6 +786,38 @@ def dot_kernel(
     block_id_k = tl.program_id(1)
     block_id_i = tl.program_id(2)
     # Finish me!
+    # batch gemm
+    off_i = tl.arange(0, B2) + block_id_i * B2
+    off_j = tl.arange(0, B0) + block_id_j * B0
+    off_k = tl.arange(0, B1) + block_id_k * B1
+
+    mask_i = off_i < N2
+    mask_j = off_j < N0
+    mask_k = off_k < N1
+
+    acc_z = tl.zeros([B2, B0, B1], dtype = tl.float32)
+
+    for mid_id in tl.range(0, MID, B_MID):
+        off_mid = tl.arange(0, B_MID) + mid_id
+        mask_mid = off_mid < MID
+
+        off_x = off_i[:, None, None] * MID * N0  + off_j[None, :, None] * MID + off_mid[None, None, :]
+        mask_x = mask_i[:, None, None] & mask_j[None, :, None] & mask_mid[None, None, :]
+
+        off_y = off_i[:, None, None] * MID * N1 + off_mid[None, :, None] * N1 + off_k[None, None, :]
+        mask_y = mask_i[:, None, None] & mask_mid[None, :, None] & mask_k[None, None, :]
+
+        x = tl.load(x_ptr + off_x, mask_x)
+        y = tl.load(y_ptr + off_y, mask_y)
+
+        z = tl.dot(x, y)
+        acc_z += z
+
+    off_z = off_i[:, None, None] * N0 * N1 + off_j[None, :, None] * N1 + off_k[None, None, :]
+    mask_z = mask_i[:, None, None] & mask_j[None, :, None] & mask_k[None, None, :]
+
+    tl.store(z_ptr + off_z, acc_z, mask_z)
+
     return
 
 
