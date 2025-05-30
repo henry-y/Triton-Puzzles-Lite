@@ -917,6 +917,14 @@ def quant_dot_kernel(
     block_id_j = tl.program_id(0)
     block_id_k = tl.program_id(1)
     # Finish me!
+
+    off_j = tl.arange(0, B0) + B0 * block_id_j
+    off_k = tl.arange(0, B1) + B1 * block_id_k
+    mask_j = off_j < N0
+    mask_k = off_k < N1
+
+    for 
+
     return
 
 
